@@ -1,0 +1,10 @@
+Package: PARE
+Title: Performance Above Random Expectation
+Version: 0.0.0.9000
+Authors@R: person("Stephen", "Piccolo", email = "stephen.piccolo.byu@gmail.com", role = c("aut", "cre"))
+Description: This package allows users to view their data in a unique way, comparing the maximum, minimum, actual, permutations, etc.... The package relies on 3 subpackages, "dplyr", "ggplot2", and "AUC".  The dplyr package helps manipulate dataframes in an easier way. The ggplot2 package gives the user more options than just the basic graphing functions of R to display his or her data.  The AUC package is used to calculate area under curves.
+Depends: R (>= 3.3.1), dplyr, ggplot2, AUC
+License: MIT
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 6.0.1

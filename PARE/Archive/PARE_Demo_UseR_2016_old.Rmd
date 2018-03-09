@@ -1,0 +1,298 @@
+---
+title: "Performance Above Random Expectation"
+author: "Stephen R. Piccolo"
+output: html_document
+---
+
+## Performance Above Random Expectation (PARE)
+
+Abstract: Many classification algorithms generate probabilistic estimates of whether a given sample belongs to a given class. Various scoring metrics have been developed to assess the quality of such probabilistic estimates. In many domains, the area under the receiver-operating-characteristic curve (AUC) is predominantly used. When applied to two-class problems, the AUC can be interpreted as the frequency at which two randomly selected samples are ranked correctly, according to their assigned probabilities. As its name implies, the AUC is derived from receiver-operating-characteristic (ROC) curves, which illustrate the relationship between the true positive rate and false positive rate. However, ROC curves—which have their roots in signal processing—are difficult for many people to interpret. For example, in medical settings, ROC curves can identify the probability threshold that achieves an optimal balance between over- and under-diagnosis for a particular disease; yet it is unintuitive to evaluate such thresholds visually. I have developed a scoring approach, Performance Above Random Expectation (PARE), which assesses classification accuracy at various probability thresholds and compares it against the accuracy obtained with random class labels. Across all thresholds, this information can be summarized as a metric that evaluates probabilistic classifiers in a way that is qualitatively equivalent to the AUC metric. However, because the PARE method uses classification accuracy as its core metric, it is more intuitively interpretable. It can also be used to visually identify a probability threshold that maximizes accuracy—thus effectively balancing true positives with false positives. This method generalizes to various other applications.
+
+#### Simulate random numbers and class values to evaluate this method
+
+```{r}
+generateNumericScores = function(means, randomSeed=0, n=numRandomValues)
+{
+  if (length(means) < 1)
+    stop("Must provide at least one mean.")
+  
+  set.seed(randomSeed)
+
+  scores = NULL
+  for (i in 1:length(means))
+    scores = c(scores, rnorm(n / length(means), mean=means[i]))
+
+  return(standardize(scores))
+}
+
+generateNumericScoresImbalanced = function(means, randomSeed=0, n=numRandomValues)
+{
+  if (length(means) != 2)
+    stop("Must provide exactly two means.")
+  
+  set.seed(randomSeed)
+
+  scores = rnorm(n * imbalanceProportion, mean=means[1])
+  scores = c(scores, rnorm(n * (1 - imbalanceProportion), mean=means[2]))
+
+  return(standardize(scores))
+}
+
+standardize = function(x)
+{
+  (x - min(x)) / (max(x) - min(x))
+}
+
+numRandomValues = 1000
+imbalanceProportion = 0.95
+
+actual = factor(c(rep(0, numRandomValues / 2), rep(1, numRandomValues / 2)))
+actualImbalanced = factor(c(rep(0, numRandomValues * imbalanceProportion), rep(1, numRandomValues * (1 - imbalanceProportion))))
+
+randomScores = generateNumericScores(0)
+mediumSignalScores = generateNumericScores(c(0, 1))
+signalScores = generateNumericScores(c(0, 10))
+oppositeScores = generateNumericScores(c(10, 0))
+sineScores = generateNumericScores(c(-10, 3, -3, 10))
+aFewGoodScores = standardize(c(rnorm(990), rnorm(10, mean=10)))
+
+signalBinaryScores = as.integer(as.logical(as.numeric(as.vector(actual))))
+oppositeBinaryScores = as.integer(!as.logical(as.numeric(as.vector(actual))))
+singleValueScores = rep(as.integer(levels(actual)[2]), length(actual))
+
+mediumSignalScoresImbalanced = generateNumericScoresImbalanced(c(0, 1))
+signalScoresImbalanced = generateNumericScoresImbalanced(c(0, 10))
+oppositeScoresImbalanced = generateNumericScoresImbalanced(c(10, 0))
+
+signalBinaryScoresImbalanced = as.integer(as.logical(as.numeric(as.vector(actualImbalanced))))
+oppositeBinaryScoresImbalanced = as.integer(!as.logical(as.numeric(as.vector(actualImbalanced))))
+```
+
+#### Plot the balanced simulated data
+
+```{r}
+hist(randomScores, breaks=50, main="Random Scores")
+hist(mediumSignalScores, breaks=50, main="Medium Signal Scores")
+hist(signalScores, breaks=50, main="Signal Scores")
+hist(oppositeScores, breaks=50, main="Opposite Scores")
+hist(sineScores, breaks=50, main="Sine Scores")
+hist(signalBinaryScores, breaks=50, main="Signal Binary Scores")
+hist(oppositeBinaryScores, breaks=50, main="Opposite Binary Scores")
+hist(aFewGoodScores, breaks=50, main="A Few Good Scores")
+
+boxplot(randomScores~actual, main="Random Scores")
+boxplot(mediumSignalScores~actual, main="Medium Signal Scores")
+boxplot(signalScores~actual, main="Signal Scores")
+boxplot(oppositeScores~actual, main="Opposite Scores")
+boxplot(sineScores~actual, main="Sine Scores")
+boxplot(signalBinaryScores~actual, main="Signal Binary Scores")
+boxplot(oppositeBinaryScores~actual, main="Opposite Binary Scores")
+boxplot(aFewGoodScores~actual, main="A Few Good Scores")
+```
+
+#### Plot the imbalanced simulated data
+
+```{r}
+hist(mediumSignalScoresImbalanced, breaks=50, main="Medium Signal Scores Imbalanced")
+hist(signalScoresImbalanced, breaks=50, main="Signal Scores Imbalanced")
+hist(oppositeScoresImbalanced, breaks=50, main="Opposite Scores Imbalanced")
+hist(signalBinaryScoresImbalanced, breaks=50, main="Signal Binary Scores Imbalanced")
+hist(oppositeBinaryScoresImbalanced, breaks=50, main="Opposite Binary Scores Imbalanced")
+
+boxplot(mediumSignalScoresImbalanced~actualImbalanced, main="Medium Signal Scores Imbalanced")
+boxplot(signalScoresImbalanced~actualImbalanced, main="Signal Scores Imbalanced")
+boxplot(oppositeScoresImbalanced~actualImbalanced, main="Opposite Scores Imbalanced")
+boxplot(signalBinaryScoresImbalanced~actualImbalanced, main="Signal Binary Scores Imbalanced")
+boxplot(oppositeBinaryScoresImbalanced~actualImbalanced, main="Opposite Binary Scores Imbalanced")
+```
+
+#### Plot ROC curves for simulated data
+
+```{r}
+library(AUC)
+
+plotROC = function(actual, scores, main)
+{
+  rocResult = roc(scores, actual)
+  aucValue = auc(rocResult)
+  
+  par(mar=c(4.1, 4.6, 3.1, 0.6))
+  plot(rocResult$fpr, rocResult$tpr, type="l", main=paste(main, "\n", "(AUC = ", format(aucValue, digits=3, nsmall=3), ")", sep=""), xlab="False positive rate", ylab="True positive rate")
+  abline(0, 1, lty=2, col=2)
+}
+
+plotROC(actual, randomScores, "Random Scores")
+plotROC(actual, mediumSignalScores, main="Medium Signal Scores")
+plotROC(actual, signalScores, main="Signal Scores")
+plotROC(actual, oppositeScores, main="Opposite Scores")
+plotROC(actual, sineScores, main="Sine Scores")
+plotROC(actual, aFewGoodScores, main="A Few Good Scores")
+
+plotROC(actual, signalBinaryScores, main="Signal Binary Scores")
+plotROC(actual, singleValueScores, main="Single Value Scores")
+plotROC(actual, oppositeBinaryScores, main="Opposite Binary Scores")
+
+plotROC(actualImbalanced, randomScores, main="Random Scores Imbalanced")
+plotROC(actualImbalanced, mediumSignalScoresImbalanced, main="Medium Signal Scores Imbalanced")
+plotROC(actualImbalanced, signalScoresImbalanced, main="Signal Scores Imbalanced")
+plotROC(actualImbalanced, oppositeScoresImbalanced, main="Opposite Scores Imbalanced")
+plotROC(actualImbalanced, signalBinaryScoresImbalanced, main="Signal Binary Scores Imbalanced")
+plotROC(actualImbalanced, oppositeBinaryScoresImbalanced, main="Opposite Binary Scores Imbalanced")
+```
+
+#### Define PARE function
+
+Don't judge me too harshly. The code is not polished yet. Also, PARE scores fall between -1 and 1. A score of 0 indicates that it's what you would expect by random chance (similar interpretation to an AUC of 0.5). A score of 1 indicates perfect classification. A score of -1 indicates that the predictions were exactly opposite of the actual labels.
+
+```{r}
+pare <- function(labels, predictors, main="", plot=TRUE)
+{
+    metricLabel="Accuracy"
+    
+    if (!is.factor(labels))
+      stop("The labels must be a factor object.")
+    
+    if (nlevels(labels) != 2)
+      stop("Currently, only two-class problems are supported.")
+
+    # Create a matrix that indicates whether each sample has been assigned to a given label
+    labelMatrix = NULL
+    for (labelLevel in levels(labels))
+      labelMatrix = cbind(labelMatrix, as.integer(labels==labelLevel))
+    colnames(labelMatrix) = levels(labels)
+    
+    labelMatrix = labelMatrix[,2,drop=FALSE]
+    colnames(labelMatrix) = levels(labels)[2]
+
+    # Convert the predictions to a numeric matrix
+    predictorMatrix = apply(as.matrix(predictors), 2, as.numeric)
+
+    # The dimensions of labelMatrix and predictorMatrix should be identical
+    if (!all(dim(labelMatrix)==dim(predictorMatrix)))
+      stop(paste("The dimensions of the labels [", paste(dim(labelMatrix), collapse=","), "] and predictors [", paste(dim(predictorMatrix), collapse=","), "] are not identical.", sep=""))
+
+    pareScores = NULL
+    
+    for (i in 1:ncol(labelMatrix))
+    {
+      classLabels = labelMatrix[,i]
+      classPredictors = predictorMatrix[,i]
+
+      # Combine the labels and predictors so we can sort them together
+      combined = cbind(classLabels, classPredictors)
+      combined = combined[order(classLabels),]
+
+      # Then separate them back out
+      classLabels = combined[,1]
+      classPredictors = combined[,2]
+      
+      thresholdStepSize = (max(classPredictors) - min(classPredictors)) / (length(classPredictors) + 1)
+      thresholds = seq(min(classPredictors), max(classPredictors), thresholdStepSize)
+
+      baselineAccuracyAtThresholds = rep(max(table(classLabels)) / length(classLabels), length(thresholds))
+
+      permutedAccuracyAtThresholds = NULL
+      set.seed(0)
+      for (threshold in thresholds)
+      {
+        predictorsDiscretized = as.integer(classPredictors > threshold)
+
+        permutedLabels = sample(classLabels)
+        permutedAccuracy = sum(predictorsDiscretized == permutedLabels) / length(classLabels)
+        permutedAccuracyAtThresholds = c(permutedAccuracyAtThresholds, permutedAccuracy)
+      }
+    
+      accuracyAtThresholds = calculateAccuracyAtThresholds(classLabels, classPredictors, thresholds)
+
+      idealPredictors = sort(classPredictors)
+      idealAccuracyAtThresholds = calculateAccuracyAtThresholds(classLabels, idealPredictors, thresholds)
+
+      wrongPredictors = sort(classPredictors, decreasing=TRUE)
+      wrongAccuracyAtThresholds = calculateAccuracyAtThresholds(classLabels, wrongPredictors, thresholds)
+
+      baselineDiff = mean(idealAccuracyAtThresholds - permutedAccuracyAtThresholds)
+      actualDiff = mean(accuracyAtThresholds - permutedAccuracyAtThresholds)
+
+      pareScore = 0
+      if (baselineDiff != 0)
+        pareScore = actualDiff / baselineDiff
+
+      if (pareScore < 0)
+      {
+          baselineDiff = mean(permutedAccuracyAtThresholds - wrongAccuracyAtThresholds)
+          pareScore = actualDiff / baselineDiff
+      }
+      
+      pareScores = c(pareScores, pareScore)
+    }
+    
+    return(mean(pareScores))
+}
+
+calculateAccuracyAtThresholds <- function(labels, predictors, thresholds)
+{
+    accuracyAtThresholds = NULL
+    
+    for (threshold in thresholds)
+    {
+        predictorsDiscretized = as.integer(predictors > threshold)
+
+        accuracy = sum(predictorsDiscretized == labels) / length(labels)
+        accuracyAtThresholds = c(accuracyAtThresholds, accuracy)
+    }
+    
+    return(accuracyAtThresholds)
+}
+```
+
+#### Calculate PARE metric in various scenarios
+
+```{r}
+pare(actual, randomScores, main="Random Scores")
+pare(actual, mediumSignalScores, main="Medium Signal Scores")
+pare(actual, signalScores, main="Signal Scores")
+pare(actual, oppositeScores, main="Opposite Scores")
+pare(actual, sineScores, main="Sine Scores")
+pare(actual, aFewGoodScores, main="A Few Good Scores")
+
+pare(actual, signalBinaryScores, main="Signal Binary Scores")
+pare(actual, oppositeBinaryScores, main="Wrong Binary Scores")
+pare(actual, singleValueScores, main="Single Value Scores")
+
+pare(actualImbalanced, randomScores, main="Random Scores Imbalanced")
+pare(actualImbalanced, mediumSignalScoresImbalanced, main="Medium Signal Scores Imbalanced")
+pare(actualImbalanced, signalScoresImbalanced, main="Signal Scores Imbalanced")
+pare(actualImbalanced, oppositeScoresImbalanced, main="Opposite Scores Imbalanced")
+pare(actualImbalanced, signalBinaryScoresImbalanced, main="Signal Binary Scores Imbalanced")
+pare(actualImbalanced, oppositeBinaryScoresImbalanced, main="Opposite Binary Scores Imbalanced")
+```
+
+#### Compare PARE values against AUC values
+
+```{r}
+library(AUC)
+
+compareAUCvPARE = function(meanOptions, iterations=20)
+{
+  aucScores = NULL
+  pareScores = NULL
+
+  for (i in 1:iterations)
+  {    
+    for (j in 1:length(meanOptions))
+    {
+      meanOption = meanOptions[j]
+      predictors = generateNumericScores(c(0, meanOption), i*j)
+
+      aucScores = c(aucScores, auc(roc(predictors, actual)))
+      pareScores = c(pareScores, pare(actual, predictors, plot=FALSE))
+    }
+  }
+
+  hist(aucScores, main=format(mean(aucScores), digits=3, nsmall=3))
+  hist(pareScores, main=format(mean(pareScores), digits=3, nsmall=3))
+  plot(aucScores, pareScores, pch=20)
+}
+
+compareAUCvPARE(rnorm(100))
+```
